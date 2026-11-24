@@ -103,15 +103,22 @@ async function graphAll(url, scopes = READ, maxPages = 50) {
   return out;
 }
 /* Run up to 20 requests per call through JSON batching. */
-async function graphBatch(requests, scopes = READ) {
-  const out = [];
-  for (let i = 0; i < requests.length; i += 20) {
-    const chunk = requests.slice(i, i + 20).map((r, j) => ({ id: String(j), ...r, ...(r.body ? { headers: { 'Content-Type': 'application/json' } } : {}) }));
-    const res = await graph('/$batch', { method: 'POST', body: JSON.stringify({ requests: chunk }) }, scopes);
-    const byId = new Map(res.responses.map((r) => [r.id, r]));
-    chunk.forEach((_, j) => out.push(byId.get(String(j))));
-  }
-  return out;
+async function graphBatch(requests, scopes = READ, parallel = 1) {
+  const chunks = [];
+  for (let i = 0; i < requests.length; i += 20) chunks.push(requests.slice(i, i + 20));
+  const results = new Array(chunks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < chunks.length) {
+      const k = next++;
+      const chunk = chunks[k].map((r, j) => ({ id: String(j), ...r, ...(r.body ? { headers: { 'Content-Type': 'application/json' } } : {}) }));
+      const res = await graph('/$batch', { method: 'POST', body: JSON.stringify({ requests: chunk }) }, scopes);
+      const m = new Map(res.responses.map((r) => [r.id, r]));
+      results[k] = chunk.map((_, j) => m.get(String(j)));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(parallel, chunks.length) }, worker));
+  return results.flat();
 }
 
 /* ================= Local store (IndexedDB) ================= */
@@ -835,17 +842,55 @@ async function runSearch() {
   } catch (e) { log('photon', e); }
 }
 
+/* OneDrive tags photos automatically, sometimes in French, sometimes in English
+   ("neige" finds 6 photos, "snow" 97). Search both languages. */
+const TAG_PAIRS = `chien:dog, chat:cat, plage:beach, neige:snow, montagne:mountain, mer:sea, lac:lake, riviere:river,
+foret:forest, arbre:tree, fleur:flower, ciel:sky, nuage:cloud, coucher de soleil:sunset, lever de soleil:sunrise, nuit:night,
+ville:city, rue:street, batiment:building, eglise:church, pont:bridge, voiture:car, velo:bicycle, bateau:boat, avion:airplane,
+nourriture:food, repas:food, gateau:cake, cafe:coffee, biere:beer, vin:wine, fete:party,
+ultimate:frisbee, football:soccer, ski:skiing, randonnee:hiking, piscine:swimming pool,
+herbe:grass, jardin:garden, parc:park, musee:museum, chateau:castle, plante:plant, oiseau:bird, cheval:horse, poisson:fish,
+enfant:child, bebe:baby, personne:person, groupe:group, sourire:smile, texte:text, capture d'ecran:screenshot, glace:ice,
+hiver:winter, ete:summer, automne:autumn, feu:fire, soleil:sun, lune:moon, livre:book, ordinateur:computer, telephone:phone,
+sable:sand, vague:wave, ile:island, cascade:waterfall, route:road, stade:stadium, marche:market`
+  .split(/\s*,\s*/).map((p) => p.split(':').map((s) => s.trim()));
+const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+function searchTerms(q) {
+  const n = norm(q), single = n.replace(/s$/, '');
+  const terms = new Set([q.trim()]);
+  for (const [fr, en] of TAG_PAIRS) {
+    if (n === fr || single === fr || n === fr + 'x') terms.add(en);
+    if (n === en || single === en) terms.add(fr);
+  }
+  return [...terms];
+}
+
 async function photoSearch(q) {
   busy(true);
+  status('Recherche dans tes photos…');
   try {
-    const esc1 = q.replace(/'/g, "''");
-    const hits = await graphAll(`${GRAPH}/me/drive/root/search(q='${encodeURIComponent(esc1)}')?$select=id&$top=200`, READ, 8);
-    const ids = new Set(hits.map((h) => h.id).filter((id) => byId.has(id)));
+    const terms = searchTerms(q);
+    const url = (t) => `/me/drive/root/search(q='${encodeURIComponent(t.replace(/'/g, "''"))}')?$select=id&$top=200`;
+    const ids = new Set();
+    const collect = (res) => res.forEach((r) => (r?.body?.value || []).forEach((h) => byId.has(h.id) && ids.add(h.id)));
+    const first = await graphBatch(terms.map((t) => ({ method: 'GET', url: url(t) })), READ, 2);
+    collect(first);
+    const capped = terms.filter((_, i) => (first[i]?.body?.value || []).length >= 200);
     closeSearch();
-    if (!ids.size) { toast(`Aucune photo géolocalisée pour « ${esc(q)} »`); return; }
-    applySetFilter({ kind: 'search', label: `« ${q} »`, ids }, false);
-    openSheet(items.filter((i) => ids.has(i.id)), { title: `« ${q} »`, fit: true });
-  } catch (e) { console.error(e); toast('La recherche OneDrive a échoué. Réessaie.'); }
+    busy(false);
+    if (!ids.size) {
+      status('');
+      toast(`Aucune photo pour « ${esc(q)} ». La recherche utilise les étiquettes de OneDrive (objets, lieux), pas les visages.`);
+      return;
+    }
+    const show = (fit) => {
+      applySetFilter({ kind: 'search', label: `« ${q} »`, ids: new Set(ids) }, false);
+      openSheet(items.filter((i) => ids.has(i.id)), { title: `« ${q} »`, fit });
+    };
+    show(true);
+    // OneDrive search stops at 200 results per word and ignores folder scoping, so say so.
+    status(capped.length ? 'OneDrive limite la recherche à 200 résultats par mot' : '', true);
+  } catch (e) { console.error(e); status(''); toast('La recherche OneDrive a échoué. Réessaie.'); }
   finally { busy(false); }
 }
 
