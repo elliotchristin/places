@@ -124,9 +124,10 @@
   </div>
   <div class="viewer-stage" id="viewerStage">
     <img id="viewerImg" alt="">
-    <div class="play" id="viewerPlay" hidden>
+    <video id="viewerVideo" playsinline controls preload="none" hidden></video>
+    <button class="play" id="viewerPlay" hidden aria-label="Lire la vidéo">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
-    </div>
+    </button>
   </div>
   <div class="viewer-count" id="viewerCount"></div>
   <div class="viewer-actions">

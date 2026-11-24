@@ -561,6 +561,7 @@ function showViewer() {
     if (u) { img.src = u; img.dataset.full = '1'; }
     img.onload = () => img.classList.remove('loading');
   });
+  stopVideo();
   $('viewerPlay').hidden = !it.v;
   $('viewerDate').textContent = it.t ? fmtDate.format(it.t) : '';
   $('viewerPlace').textContent = '';
@@ -577,10 +578,43 @@ function stepViewer(d) {
   showViewer();
 }
 function closeViewer() {
+  stopVideo();
   $('viewer').classList.remove('open');
   $('viewer').setAttribute('aria-hidden', 'true');
   $('viewerImg').removeAttribute('src');
 }
+
+/* Videos play inside the app, streamed from OneDrive only when you tap play. */
+function stopVideo() {
+  const v = $('viewerVideo');
+  v.pause();
+  v.removeAttribute('src');
+  v.load();
+  v.hidden = true;
+  $('viewerImg').hidden = false;
+}
+async function playVideo() {
+  const it = vList[vIdx];
+  if (!it?.v) return;
+  const play = $('viewerPlay');
+  play.classList.add('loading');
+  try {
+    const r = await graph(`/me/drive/items/${it.id}?select=id,@microsoft.graph.downloadUrl`);
+    if (vList[vIdx] !== it) return;
+    const v = $('viewerVideo');
+    v.src = r['@microsoft.graph.downloadUrl'];
+    v.hidden = false;
+    $('viewerImg').hidden = true;
+    play.hidden = true;
+    await v.play().catch(() => {}); // iOS may need a second tap on the native control
+  } catch (e) {
+    console.error(e);
+    toast('Impossible de lire cette vidéo ici.', it.u);
+  } finally {
+    play.classList.remove('loading');
+  }
+}
+$('viewerPlay').onclick = (e) => { e.stopPropagation(); playVideo(); };
 function renderHeart() {
   const it = vList[vIdx];
   const on = isFav(it);
@@ -598,7 +632,10 @@ $('viewerAlbum').onclick = () => vList[vIdx] && openAlbumPicker([vList[vIdx].id]
 (() => {
   let x0 = null, y0 = null;
   const st = $('viewerStage');
-  st.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+  st.addEventListener('touchstart', (e) => {
+    if (e.target.closest('video')) { x0 = y0 = null; return; } // scrubbing a video is not a swipe
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+  }, { passive: true });
   st.addEventListener('touchend', (e) => {
     if (x0 == null) return;
     const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
@@ -607,7 +644,8 @@ $('viewerAlbum').onclick = () => vList[vIdx] && openAlbumPicker([vList[vIdx].id]
     x0 = y0 = null;
   });
   st.addEventListener('click', (e) => {
-    if (vList[vIdx]?.v) { window.open(vList[vIdx].u, '_blank', 'noopener'); return; }
+    if (e.target.closest('video')) return; // let the native video controls work
+    if (vList[vIdx]?.v && !$('viewerPlay').hidden) { playVideo(); return; }
     const r = st.getBoundingClientRect();
     if (e.clientX < r.left + r.width / 3) stepViewer(-1);
     else if (e.clientX > r.right - r.width / 3) stepViewer(1);
@@ -616,6 +654,8 @@ $('viewerAlbum').onclick = () => vList[vIdx] && openAlbumPicker([vList[vIdx].id]
 
 /* ================= Albums & favourites (OneDrive albums = Graph "bundles") ================= */
 let albumsCache = null;
+// The webUrl Graph returns for albums (photos.onedrive.com/album/…) lands on an error page; this one opens the album.
+const albumUrl = (id) => `https://onedrive.live.com/photos?photosData=${encodeURIComponent('/photos/album/' + id)}`;
 // Favourites album: file name -> id of the entry inside the album (OneDrive gives album entries their own ids).
 let favByName = null, favAlbum = undefined;
 
@@ -624,7 +664,7 @@ async function listAlbums(force = false) {
   // No $select here: Graph drops the "bundle" facet when fields are selected.
   const all = await graphAll(`${GRAPH}/me/drive/bundles?$top=200`);
   albumsCache = all.filter((b) => b.bundle?.album || /\/album\//.test(b.webUrl || ''))
-    .map((b) => ({ id: b.id, name: b.name, count: b.bundle.childCount ?? 0, url: b.webUrl, mod: Date.parse(b.lastModifiedDateTime) || 0 }))
+    .map((b) => ({ id: b.id, name: b.name, count: b.bundle?.childCount ?? 0, url: albumUrl(b.id), mod: Date.parse(b.lastModifiedDateTime) || 0 }))
     .sort((a, b) => b.mod - a.mod);
   return albumsCache;
 }
@@ -654,7 +694,10 @@ async function loadFavs() {
   if (favByName) return favByName;
   try {
     const albums = await listAlbums();
-    favAlbum = albums.find((a) => a.name === FAV_ALBUM) || null;
+    // Find it by remembered id first, so renaming the album in OneDrive ("Favoris (Maps)") keeps working.
+    const savedId = store.get('favAlbumId', '');
+    favAlbum = albums.find((a) => a.id === savedId) || albums.find((a) => a.name.startsWith(FAV_ALBUM)) || null;
+    if (favAlbum) store.set('favAlbumId', favAlbum.id);
     await refreshFavs();
   } catch (e) { log('favs', e); favByName = new Map(); }
   renderHeart();
@@ -668,7 +711,11 @@ async function setLiked(ids, on) {
   try {
     if (on) {
       const todo = list.filter((i) => !isFav(i)).map((i) => i.id);
-      if (!favAlbum) { const a = await createAlbum(FAV_ALBUM, todo); favAlbum = { id: a.id, name: a.name, url: a.webUrl }; }
+      if (!favAlbum) {
+        const a = await createAlbum(FAV_ALBUM, todo);
+        favAlbum = { id: a.id, name: a.name, url: albumUrl(a.id) };
+        store.set('favAlbumId', a.id);
+      }
       else if (todo.length) await addToAlbum(favAlbum.id, todo);
     } else if (favAlbum) {
       const entries = list.map((i) => favByName.get(i.n)).filter(Boolean);
@@ -701,12 +748,13 @@ async function openAlbumPicker(ids) {
     try {
       const a = await createAlbum(name, ids);
       closeModal(); setSelecting(false);
-      toast(`Album « ${esc(a.name)} » créé`, a.webUrl);
+      toast(`Album « ${esc(a.name)} » créé`, albumUrl(a.id));
     } catch (err) { console.error(err); toast("Impossible de créer l'album. Réessaie dans un instant."); }
     busy(false);
   };
   try {
-    const albums = (await listAlbums()).filter((a) => a.name !== FAV_ALBUM);
+    await loadFavs();
+    const albums = (await listAlbums()).filter((a) => a.id !== favAlbum?.id);
     $('albumList').innerHTML = albums.length ? '' : '<p class="modal-text fine">Aucun album pour l’instant. Crée le premier ci-dessus.</p>';
     for (const a of albums) {
       const row = document.createElement('button');
