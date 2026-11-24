@@ -10,7 +10,7 @@ const GRAPH = 'https://graph.microsoft.com/v1.0';
 const PIN_SIZE = 'c360x360_crop';
 const VIEW_SIZE = 'c2048x2048';
 const FAV_ALBUM = 'Favoris';
-const DATA_VERSION = 3; // bump to force a full re-read when the stored item shape changes
+const DATA_VERSION = 4; // bump to force a full re-read when the stored item shape changes
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const $ = (id) => document.getElementById(id);
@@ -69,10 +69,17 @@ async function ensureWrite() {
 /* ================= Graph ================= */
 async function graph(url, opts = {}, scopes = READ, attempt = 0) {
   const token = await getToken(scopes);
-  const res = await fetch(url.startsWith('http') ? url : GRAPH + url, {
-    ...opts,
-    headers: { Authorization: 'Bearer ' + token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
-  });
+  let res;
+  try {
+    res = await fetch(url.startsWith('http') ? url : GRAPH + url, {
+      ...opts,
+      headers: { Authorization: 'Bearer ' + token, ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+    });
+  } catch (netErr) { // flaky mobile network: retry a few times
+    if (attempt >= 4) throw netErr;
+    await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    return graph(url, opts, scopes, attempt + 1);
+  }
   if ((res.status === 429 || res.status >= 500) && attempt < 5) {
     await new Promise((r) => setTimeout(r, (Number(res.headers.get('Retry-After')) || 2 ** attempt) * 1000));
     return graph(url, opts, scopes, attempt + 1);
@@ -151,6 +158,7 @@ function toItem(it) {
   const taken = it.photo?.takenDateTime || it.fileSystemInfo?.createdDateTime;
   return {
     id: it.id,
+    n: it.name, // album entries get their own ids, so favourites are matched by file name
     la: +loc.latitude.toFixed(6),
     lo: +loc.longitude.toFixed(6),
     t: taken ? Date.parse(taken) : 0,
@@ -568,15 +576,15 @@ function closeViewer() {
 }
 function renderHeart() {
   const it = vList[vIdx];
-  const on = !!(it && favIds?.has(it.id));
+  const on = isFav(it);
   $('viewerLike').setAttribute('aria-pressed', String(on));
   $('viewerLike').setAttribute('aria-label', on ? 'Retirer des favoris' : 'Ajouter aux favoris');
 }
 $('viewerLike').onclick = async () => {
   const it = vList[vIdx];
-  if (!it) return;
+  if (!it || !(await ensureWrite())) return;
   await loadFavs();
-  const on = !favIds?.has(it.id);
+  const on = !isFav(it);
   if (await setLiked([it.id], on)) { renderHeart(); toast(on ? 'Ajoutée aux favoris' : 'Retirée des favoris'); }
 };
 $('viewerAlbum').onclick = () => vList[vIdx] && openAlbumPicker([vList[vIdx].id]);
@@ -601,7 +609,8 @@ $('viewerAlbum').onclick = () => vList[vIdx] && openAlbumPicker([vList[vIdx].id]
 
 /* ================= Albums & favourites (OneDrive albums = Graph "bundles") ================= */
 let albumsCache = null;
-let favIds = null, favAlbum = undefined;
+// Favourites album: file name -> id of the entry inside the album (OneDrive gives album entries their own ids).
+let favByName = null, favAlbum = undefined;
 
 async function listAlbums(force = false) {
   if (albumsCache && !force) return albumsCache;
@@ -630,29 +639,35 @@ async function createAlbum(name, ids) {
   return album;
 }
 
+async function refreshFavs() {
+  const kids = favAlbum ? await graphAll(`${GRAPH}/me/drive/items/${favAlbum.id}/children?$select=id,name&$top=1000`) : [];
+  favByName = new Map(kids.map((k) => [k.name, k.id]));
+}
 async function loadFavs() {
-  if (favIds) return favIds;
+  if (favByName) return favByName;
   try {
     const albums = await listAlbums();
     favAlbum = albums.find((a) => a.name === FAV_ALBUM) || null;
-    favIds = favAlbum ? await albumIds(favAlbum.id) : new Set();
-  } catch (e) { log('favs', e); favIds = new Set(); }
+    await refreshFavs();
+  } catch (e) { log('favs', e); favByName = new Map(); }
   renderHeart();
-  return favIds;
+  return favByName;
 }
+const isFav = (it) => !!(it && favByName?.has(it.n));
 async function setLiked(ids, on) {
   if (!(await ensureWrite())) return false;
   await loadFavs();
+  const list = ids.map((id) => byId.get(id)).filter(Boolean);
   try {
     if (on) {
-      const todo = ids.filter((id) => !favIds.has(id));
+      const todo = list.filter((i) => !isFav(i)).map((i) => i.id);
       if (!favAlbum) { const a = await createAlbum(FAV_ALBUM, todo); favAlbum = { id: a.id, name: a.name, url: a.webUrl }; }
       else if (todo.length) await addToAlbum(favAlbum.id, todo);
-      todo.forEach((id) => favIds.add(id));
     } else if (favAlbum) {
-      await graphBatch(ids.map((id) => ({ method: 'DELETE', url: `/drive/bundles/${favAlbum.id}/children/${id}` })), WRITE);
-      ids.forEach((id) => favIds.delete(id));
+      const entries = list.map((i) => favByName.get(i.n)).filter(Boolean);
+      await graphBatch(entries.map((eid) => ({ method: 'DELETE', url: `/drive/bundles/${favAlbum.id}/children/${eid}` })), WRITE);
     }
+    await refreshFavs();
     albumsCache = null;
     return true;
   } catch (e) {
@@ -696,7 +711,8 @@ async function openAlbumPicker(ids) {
           const n = await addToAlbum(a.id, ids);
           albumsCache = null;
           closeModal(); setSelecting(false);
-          toast(`${plural(n, 'photo ajoutée', 'photos ajoutées')} à « ${esc(a.name)} »`, a.url);
+          const already = ids.length - n;
+          toast(`${n ? plural(n, 'photo ajoutée', 'photos ajoutées') : 'Rien de nouveau'} à « ${esc(a.name)} »${already > 0 ? ` (${plural(already, 'y était déjà', 'y étaient déjà')})` : ''}`, a.url);
         } catch (err) { console.error(err); toast("OneDrive a refusé l'ajout. Réessaie dans un instant."); }
         busy(false);
       };
@@ -913,7 +929,7 @@ async function main() {
   });
 }
 
-let syncing = false;
+let syncing = false, syncRetries = 0;
 async function runSync(firstRun) {
   if (syncing) return;
   syncing = true;
@@ -937,7 +953,9 @@ async function runSync(firstRun) {
     status(fresh.length ? 'À jour' : 'Aucune photo géolocalisée trouvée', true);
   } catch (e) {
     console.error(e);
-    status(e.status === 401 || e.status === 403 ? 'Accès refusé par OneDrive — reconnecte-toi' : 'Synchronisation interrompue — elle reprendra à la prochaine ouverture', true);
+    const denied = e.status === 401 || e.status === 403;
+    status(denied ? 'Accès refusé par OneDrive — reconnecte-toi' : 'Connexion interrompue — nouvel essai dans 15 s', true);
+    if (!denied && (syncRetries = (syncRetries || 0) + 1) <= 3) setTimeout(() => runSync(firstRun), 15000);
   } finally {
     syncing = false;
   }
