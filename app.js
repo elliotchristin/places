@@ -618,6 +618,43 @@ async function playVideo() {
   }
 }
 $('viewerPlay').onclick = (e) => { e.stopPropagation(); playVideo(); };
+
+/* Share the real file through the iPhone share sheet (Save to Photos, AirDrop, Messages…).
+   iOS only allows the sheet right after a tap, so a slow download may need a second tap. */
+let shareFile = null; // { id, file }
+async function onShare() {
+  const it = vList[vIdx];
+  if (!it) return;
+  const btn = $('viewerShare');
+  try {
+    if (shareFile?.id !== it.id) {
+      btn.classList.add('loading');
+      const r = await graph(`/me/drive/items/${it.id}?select=id,name,file,@microsoft.graph.downloadUrl`);
+      const blob = await (await fetch(r['@microsoft.graph.downloadUrl'])).blob();
+      shareFile = { id: it.id, file: new File([blob], r.name, { type: r.file?.mimeType || blob.type }) };
+    }
+    const data = { files: [shareFile.file] };
+    if (navigator.canShare?.(data)) {
+      try { await navigator.share(data); }
+      catch (e) {
+        if (e.name === 'NotAllowedError') toast('Photo prête : touche encore Partager');
+        else if (e.name !== 'AbortError') throw e;
+      }
+    } else { // computers: plain download
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(shareFile.file);
+      a.download = shareFile.file.name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+  } catch (e) {
+    console.error(e);
+    toast('Impossible de récupérer ce fichier. Réessaie.');
+  } finally {
+    btn.classList.remove('loading');
+  }
+}
+$('viewerShare').onclick = onShare;
 function renderHeart() {
   const it = vList[vIdx];
   const on = isFav(it);

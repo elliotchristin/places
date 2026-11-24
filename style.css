@@ -214,16 +214,19 @@ body.busy .modal-card, body.busy .search { opacity: 0.6; pointer-events: none; }
   display: flex; flex-direction: column; opacity: 0; pointer-events: none; transition: opacity 0.22s ease;
 }
 .viewer.open { opacity: 1; pointer-events: auto; }
-.viewer-top { display: flex; align-items: center; gap: 12px; padding: calc(var(--safe-top) + 8px) 12px 8px; }
+/* The photo always fills the screen; bars float over it and hide while zoomed, like Photos. */
+.viewer-top { position: absolute; z-index: 2; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 12px;
+  padding: calc(var(--safe-top) + 8px) 12px 18px; background: linear-gradient(rgba(0,0,0,0.55), transparent); }
 .icon-spacer { width: 36px; flex: none; }
 .viewer .icon-btn { background: rgba(255,255,255,0.14); color: #fff; }
 .viewer-meta { flex: 1; display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .viewer-meta strong { font-size: 15px; font-weight: 600; }
 .viewer-meta span { font-size: 12.5px; color: rgba(255,255,255,0.65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.viewer-stage { flex: 1; position: relative; display: grid; place-items: center; overflow: hidden; touch-action: none; }
+.viewer-stage { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; touch-action: none; }
 .viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; will-change: transform; }
 .viewer-top, .viewer-count, .viewer-actions { transition: opacity 0.2s ease; }
-.viewer.bare .viewer-top, .viewer.bare .viewer-count, .viewer.bare .viewer-actions { opacity: 0; pointer-events: none; }
+.viewer.bare .viewer-top, .viewer.bare .viewer-count, .viewer.bare .viewer-actions,
+.viewer.zoomed .viewer-top, .viewer.zoomed .viewer-count, .viewer.zoomed .viewer-actions { opacity: 0; pointer-events: none; }
 .viewer-stage img.loading { opacity: 0.35; }
 .viewer-stage video { max-width: 100%; max-height: 100%; background: #000; }
 .play { position: absolute; width: 72px; height: 72px; border-radius: 50%; border: 0; color: #fff; cursor: pointer;
@@ -231,9 +234,12 @@ body.busy .modal-card, body.busy .search { opacity: 0.6; pointer-events: none; }
 .play svg { width: 30px; height: 30px; margin-left: 4px; }
 .play.loading svg { animation: pulse 0.9s ease-in-out infinite alternate; }
 @keyframes pulse { from { opacity: 1; } to { opacity: 0.3; } }
-.viewer-count { text-align: center; font-size: 12.5px; color: rgba(255,255,255,0.6); padding: 8px 0 4px; font-variant-numeric: tabular-nums; min-height: 30px; }
-.viewer-actions { display: flex; justify-content: space-around; padding: 6px 24px calc(var(--safe-bottom) + 12px); }
+.viewer-count { position: absolute; z-index: 2; left: 0; right: 0; bottom: calc(var(--safe-bottom) + 70px);
+  text-align: center; font-size: 12.5px; color: rgba(255,255,255,0.75); font-variant-numeric: tabular-nums; text-shadow: 0 1px 3px rgba(0,0,0,0.6); pointer-events: none; }
+.viewer-actions { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-around;
+  padding: 24px 24px calc(var(--safe-bottom) + 12px); background: linear-gradient(transparent, rgba(0,0,0,0.55)); }
 .viewer-actions .icon-btn { width: 46px; height: 46px; }
+.icon-btn.loading svg { animation: pulse 0.9s ease-in-out infinite alternate; }
 .viewer-actions svg { width: 22px; height: 22px; }
 #viewerLike svg path { fill: none; }
 #viewerLike[aria-pressed="true"] { color: var(--heart); }
