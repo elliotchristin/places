@@ -549,18 +549,27 @@ function openViewer(list, idx) {
   showViewer();
   loadFavs(); // to show the heart state
 }
-function showViewer() {
+function showViewer(readySrc = null) {
   const it = vList[vIdx];
   if (!it) return;
   const img = $('viewerImg');
-  img.classList.add('loading');
-  img.dataset.full = '';
-  thumbCache.get(it.id + '|' + PIN_SIZE)?.then((u) => { if (u && vList[vIdx] === it && !img.dataset.full) img.src = u; });
-  thumb(it.id, VIEW_SIZE).then((u) => {
-    if (vList[vIdx] !== it) return;
-    if (u) { img.src = u; img.dataset.full = '1'; }
-    img.onload = () => img.classList.remove('loading');
-  });
+  img.dataset.hires = '';
+  if (readySrc) { // coming from a swipe: the neighbour image is already loaded, no flash
+    img.src = readySrc;
+    img.dataset.full = '1';
+    img.classList.remove('loading');
+  } else {
+    img.classList.add('loading');
+    img.dataset.full = '';
+    img.removeAttribute('src');
+    thumbCache.get(it.id + '|' + PIN_SIZE)?.then((u) => { if (u && vList[vIdx] === it && !img.dataset.full) img.src = u; });
+    thumb(it.id, VIEW_SIZE).then((u) => {
+      if (vList[vIdx] !== it) return;
+      if (u) { img.src = u; img.dataset.full = '1'; }
+      img.onload = () => img.classList.remove('loading');
+    });
+  }
+  loadSides();
   stopVideo();
   resetZoom();
   $('viewerPlay').hidden = !it.v;
@@ -570,17 +579,51 @@ function showViewer() {
   $('viewerOpen').href = it.u;
   $('viewerCount').textContent = vList.length > 1 ? `${vIdx + 1} sur ${fmtNum.format(vList.length)}` : '';
   renderHeart();
-  [vIdx - 1, vIdx + 1].forEach((j) => vList[j] && thumb(vList[j].id, VIEW_SIZE).then((u) => { if (u) new Image().src = u; }));
 }
+// Neighbour photos sit left and right of the current one, so a swipe slides them in like Photos.
+function loadSides() {
+  [[-1, $('prevImg')], [1, $('nextImg')]].forEach(([d, el]) => {
+    const it = vList[vIdx + d];
+    el.removeAttribute('src');
+    el.dataset.id = it?.id || '';
+    if (it) thumb(it.id, VIEW_SIZE).then((u) => { if (u && el.dataset.id === it.id) el.src = u; });
+  });
+}
+
+const GAP = 24, SLIDE_MS = 320, EASE = 'cubic-bezier(0.22, 0.8, 0.3, 1)';
+function setTrack(x, ms = 0) {
+  const tr = $('track');
+  tr.style.transition = ms ? `transform ${ms}ms ${EASE}` : 'none';
+  tr.style.transform = x ? `translate3d(${x}px,0,0)` : '';
+}
+let sliding = false;
 function stepViewer(d) {
-  const j = vIdx + d;
-  if (j < 0 || j >= vList.length) return;
-  vIdx = j;
-  showViewer();
+  if (sliding) return;
+  const j = vIdx + d, w = $('viewerStage').clientWidth;
+  if (j < 0 || j >= vList.length) { setTrack(0, 250); return; } // nothing there: spring back
+  sliding = true;
+  setTrack(-d * (w + GAP), SLIDE_MS);
+  setTimeout(() => {
+    const side = d > 0 ? $('nextImg') : $('prevImg');
+    const ready = side.dataset.id === vList[j].id && side.complete && side.naturalWidth ? side.src : null;
+    vIdx = j;
+    showViewer(ready);
+    setTrack(0);
+    sliding = false;
+  }, SLIDE_MS);
+}
+function setDismiss(dy, ms = 0) { // drag down to close: photo follows the finger, background fades
+  const c = $('slideCenter'), p = Math.min(1, Math.max(0, dy) / 400);
+  c.style.transition = ms ? `transform ${ms}ms ${EASE}` : 'none';
+  c.style.transform = dy ? `translate3d(0,${dy}px,0) scale(${1 - p * 0.25})` : '';
+  $('viewer').style.setProperty('--bg-a', String(1 - p));
+  $('viewer').classList.toggle('dragging', !!dy);
 }
 function closeViewer() {
   stopVideo();
   resetZoom();
+  setDismiss(0);
+  setTrack(0);
   $('viewer').classList.remove('bare');
   $('viewer').classList.remove('open');
   $('viewer').setAttribute('aria-hidden', 'true');
@@ -711,7 +754,11 @@ function zoomAt(s, x, y, animate) {
 }
 function toggleZoom(x, y) {
   if (vList[vIdx]?.v) return;
-  if (zoom.s > 1.01) resetZoom(true); else zoomAt(2.5, x, y, true);
+  if (zoom.s > 1.01) return resetZoom(true);
+  // Like Photos: a double tap zooms until the photo fills the whole screen.
+  const img = $('viewerImg'), st = $('viewerStage');
+  const fill = Math.max(st.clientWidth / (img.offsetWidth || 1), st.clientHeight / (img.offsetHeight || 1));
+  zoomAt(fill > 1.15 ? fill : 2.5, x, y, true);
 }
 function toggleChrome() { $('viewer').classList.toggle('bare'); }
 
@@ -752,6 +799,14 @@ function toggleChrome() { $('viewer').classList.toggle('bare'); }
         e.preventDefault();
         zoom.tx = g.t0.x + dx; zoom.ty = g.t0.y + dy;
         clampPan(); applyZoom();
+      } else if (g.moved && !sliding) {
+        e.preventDefault();
+        g.axis ||= Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+        if (g.axis === 'x') { // the strip of photos follows the finger, with resistance at the ends
+          const edge = (dx > 0 && vIdx === 0) || (dx < 0 && vIdx === vList.length - 1);
+          setTrack(edge ? dx * 0.3 : dx);
+        } else if (dy > 0) setDismiss(dy);
+        g.last = { x: t[0].clientX, y: t[0].clientY, time: Date.now(), vx: (t[0].clientX - (g.last?.x ?? g.x0)) / Math.max(1, Date.now() - (g.last?.time ?? g.time)) };
       }
     }
   }, { passive: false });
@@ -778,9 +833,17 @@ function toggleChrome() { $('viewer').classList.toggle('bare'); }
         clearTimeout(tapTimer);
         tapTimer = setTimeout(toggleChrome, 300);
       }
-    } else if (zoom.s <= 1.01) { // swipes only when not zoomed
-      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) stepViewer(dx < 0 ? 1 : -1);
-      else if (dy > 90) closeViewer();
+    } else if (zoom.s <= 1.01 && g.axis === 'x') { // finish the slide: far enough or a quick flick
+      const w = $('viewerStage').clientWidth, vx = g.last?.vx || 0;
+      if (dx < -w * 0.22 || vx < -0.45) stepViewer(1);
+      else if (dx > w * 0.22 || vx > 0.45) stepViewer(-1);
+      else setTrack(0, 250);
+    } else if (zoom.s <= 1.01 && g.axis === 'y') {
+      if (dy > 110) {
+        setDismiss(dy + 200, 200);
+        $('viewer').style.setProperty('--bg-a', '0');
+        setTimeout(closeViewer, 180);
+      } else setDismiss(0, 250);
     }
     g = null;
   });
@@ -1131,7 +1194,7 @@ function status(text, done = false) {
 
 document.addEventListener('keydown', (e) => {
   if ($('viewer').classList.contains('open')) {
-    if (e.key === 'ArrowRight') stepViewer(1);
+    if (e.key === 'ArrowRight') stepViewer(1); // animated, like a swipe
     else if (e.key === 'ArrowLeft') stepViewer(-1);
     else if (e.key === 'Escape') closeViewer();
   } else if (e.key === 'Escape') { closeModal(); closePopover(); closeSheet(); }
@@ -1163,6 +1226,7 @@ async function main() {
   if (!firstRun) map.once('load', () => fitAll(false));
 
   await runSync(firstRun);
+  checkUpdate();
 
   // Coming back to the app (iOS keeps it in memory): refresh thumbnails and pull new photos.
   let lastActive = Date.now();
@@ -1171,7 +1235,22 @@ async function main() {
     const away = Date.now() - lastActive;
     if (away > 2 * 3600e3) { thumbCache.clear(); clearMarkers(); scheduleMarkers(); }
     if (away > 5 * 60e3) runSync(false);
+    checkUpdate();
   });
+}
+
+/* iPhone home-screen apps keep old files around: reload by itself when a new version is online. */
+async function checkUpdate() {
+  try {
+    const r = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const { build } = await r.json();
+    const busyNow = $('viewer').classList.contains('open') || $('modal').classList.contains('open');
+    if (!build || !window.BUILD || build === window.BUILD || busyNow) return;
+    if (sessionStorage.getItem('lieux.reloadedFor') === build) return; // never loop if a cache serves old files
+    sessionStorage.setItem('lieux.reloadedFor', build);
+    location.reload();
+  } catch {}
 }
 
 let syncing = false, syncRetries = 0;

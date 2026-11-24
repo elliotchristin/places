@@ -8,14 +8,16 @@
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<!-- black-translucent: the app draws under the status bar, so photos can really fill the screen -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Lieux">
 <meta name="robots" content="noindex">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/maplibre-gl.css">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=BUILD_20261124154351">
+<script>window.BUILD = 'BUILD_20261124154351';</script>
 </head>
 <body>
 <div id="map" aria-label="Carte de tes photos"></div>
@@ -123,11 +125,17 @@
     <span class="icon-spacer"></span>
   </div>
   <div class="viewer-stage" id="viewerStage">
-    <img id="viewerImg" alt="">
-    <video id="viewerVideo" playsinline controls preload="none" hidden></video>
-    <button class="play" id="viewerPlay" hidden aria-label="Lire la vidéo">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
-    </button>
+    <div class="track" id="track">
+      <div class="slide side prev"><img id="prevImg" alt=""></div>
+      <div class="slide" id="slideCenter">
+        <img id="viewerImg" alt="">
+        <video id="viewerVideo" playsinline controls preload="none" hidden></video>
+        <button class="play" id="viewerPlay" hidden aria-label="Lire la vidéo">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+        </button>
+      </div>
+      <div class="slide side next"><img id="nextImg" alt=""></div>
+    </div>
   </div>
   <div class="viewer-count" id="viewerCount"></div>
   <div class="viewer-actions">
@@ -164,7 +172,7 @@
 <script src="vendor/msal-browser.min.js"></script>
 <script src="vendor/maplibre-gl.js"></script>
 <script src="vendor/supercluster.min.js"></script>
-<script src="mapstyle.js"></script>
-<script src="app.js"></script>
+<script src="mapstyle.js?v=BUILD_20261124154351"></script>
+<script src="app.js?v=BUILD_20261124154351"></script>
 </body>
 </html>
