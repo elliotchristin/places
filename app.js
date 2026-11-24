@@ -10,7 +10,8 @@ const STYLES = {
   light: 'https://tiles.openfreemap.org/styles/liberty',
   dark: 'https://tiles.openfreemap.org/styles/dark',
 };
-const DEBUG = new URLSearchParams(location.search).has('debug');
+const DATA_VERSION = 2; // bump to force a full re-read when the stored item shape changes
+const DEBUG =new URLSearchParams(location.search).has('debug');
 
 const $ = (id) => document.getElementById(id);
 const log = (...a) => DEBUG && console.log('[lieux]', ...a);
@@ -105,7 +106,10 @@ const db = {
   apply(puts, dels) {
     return this.tx('items', 'readwrite', (s) => { puts.forEach((p) => s.put(p)); dels.forEach((id) => s.delete(id)); });
   },
-  async reset() { await this.tx('items', 'readwrite', (s) => s.clear()); await this.tx('meta', 'readwrite', (s) => s.clear()); },
+  async reset() {
+    await this.tx('items', 'readwrite', (s) => s.clear());
+    await this.tx('meta', 'readwrite', (s) => { s.clear(); s.put(DATA_VERSION, 'version'); });
+  },
 };
 
 /* ---------------- Sync (delta query) ---------------- */
@@ -121,14 +125,14 @@ function toItem(it) {
     la: +loc.latitude.toFixed(6),
     lo: +loc.longitude.toFixed(6),
     t: taken ? Date.parse(taken) : 0,
-    v: !!(it.video || (it.file.mimeType || '').startsWith('video/')) ? 1 : 0,
+    v: (it.file.mimeType || '').startsWith('video/') ? 1 : 0, // not the video facet: motion photos (.MP.jpg) carry it too
     u: it.webUrl,
   };
 }
 
 async function sync(onProgress) {
   let url = (await db.getMeta('resumeLink')) || (await db.getMeta('deltaLink'))
-    || `${GRAPH}/me/drive/root/delta?$select=${SELECT}`;
+    || `${GRAPH}/me/drive/root/delta?$select=${SELECT}&$top=1000`;
   let seen = 0, changed = 0;
   while (url) {
     let page;
@@ -137,7 +141,7 @@ async function sync(onProgress) {
     } catch (e) {
       if (e.status === 410) { // delta token expired: start over
         await db.reset();
-        url = `${GRAPH}/me/drive/root/delta?$select=${SELECT}`;
+        url = `${GRAPH}/me/drive/root/delta?$select=${SELECT}&$top=1000`;
         continue;
       }
       throw e;
@@ -266,6 +270,7 @@ function initMap() {
   map.touchZoomRotate.disableRotation();
   map.on('style.load', () => { frenchLabels(); addPhotoLayer(); clearMarkers(); });
   map.on('render', scheduleMarkers);
+  map.once('load', () => document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'));
   dark.addEventListener('change', () => map.setStyle(dark.matches ? STYLES.dark : STYLES.light));
 }
 
@@ -300,8 +305,11 @@ function updateMarkers() {
     seen.add(key);
     if (markers.has(key)) continue;
     const el = buildPin(p);
-    const m = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -8] }).setLngLat(f.geometry.coordinates).addTo(map);
-    el.addEventListener('click', (ev) => { ev.stopPropagation(); onPinClick(p, f.geometry.coordinates); });
+    // Anchor clusters on a real photo, not on the centroid (which can land in the ocean).
+    const rep = p.cluster ? byT.get(p.latest) : null;
+    const at = rep ? [rep.lo, rep.la] : f.geometry.coordinates;
+    const m = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -8] }).setLngLat(at).addTo(map);
+    el.addEventListener('click', (ev) => { ev.stopPropagation(); onPinClick(p, at); });
     markers.set(key, m);
   }
   for (const [k, m] of markers) if (!seen.has(k)) { m.remove(); markers.delete(k); }
@@ -540,11 +548,29 @@ async function main() {
 
   $('topbar').hidden = false;
   initMap();
+  if ((await db.getMeta('version')) !== DATA_VERSION) { await db.reset(); await db.setMeta('version', DATA_VERSION); }
   const cached = await db.all();
   const firstRun = !cached.length;
   setItems(cached);
   if (!firstRun) map.once('load', () => fitAll(false));
 
+  await runSync(firstRun);
+
+  // Returning to the app (iOS keeps home-screen apps in memory): refresh thumbnails and pull new photos.
+  let lastActive = Date.now();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const away = Date.now() - lastActive;
+    lastActive = Date.now();
+    if (away > 2 * 3600e3) { thumbCache.clear(); clearMarkers(); scheduleMarkers(); } // thumbnail links expire after a few hours
+    if (away > 5 * 60e3) runSync(false);
+  });
+}
+
+let syncing = false;
+async function runSync(firstRun) {
+  if (syncing) return;
+  syncing = true;
   status(firstRun ? 'Lecture de ton OneDrive…' : 'Mise à jour…');
   try {
     let shown = 0;
@@ -566,6 +592,8 @@ async function main() {
   } catch (e) {
     console.error(e);
     status(e.status === 403 || e.status === 401 ? 'Accès refusé par OneDrive — reconnecte-toi' : 'Synchronisation interrompue — elle reprendra à la prochaine ouverture', true);
+  } finally {
+    syncing = false;
   }
 }
 
