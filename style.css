@@ -43,6 +43,11 @@ body.busy { cursor: progress; }
 body.busy .modal-card, body.busy .search { opacity: 0.6; pointer-events: none; }
 
 #map { position: fixed; inset: 0; }
+/* Map controls fade away while the map moves (or after a tap), Photos-style. */
+.topbar, .controls, .chip, .years, .maplibregl-ctrl-bottom-right { transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.22, 0.8, 0.3, 1); }
+body.map-bare .topbar, body.map-bare .controls, body.map-bare .chip { opacity: 0; transform: translateY(-12px); pointer-events: none; }
+body.map-bare .years { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+body.map-bare .maplibregl-ctrl-bottom-right { opacity: 0; }
 /* The status bar (white text) sits over the map: a soft scrim keeps the time and battery readable. */
 body::before { content: ""; position: fixed; z-index: 4; top: 0; left: 0; right: 0; height: calc(var(--safe-top) + 8px);
   background: linear-gradient(rgba(0,0,0,0.32), rgba(0,0,0,0)); pointer-events: none; }

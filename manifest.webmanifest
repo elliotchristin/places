@@ -4,7 +4,7 @@
   "description": "Tes photos OneDrive sur la carte",
   "start_url": "./",
   "scope": "./",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#f2f2f7",
   "theme_color": "#f2f2f7",
   "icons": [

@@ -328,6 +328,28 @@ async function initMap() {
   map.touchZoomRotate.disableRotation();
   map.on('move', scheduleMarkers);
   map.on('moveend', scheduleMarkers);
+
+  // Full-screen map like Photos: controls get out of the way while you move the map
+  // and come back when you stop; a tap on the map hides or shows them for good.
+  let pinnedBare = false, showTimer = null;
+  const setBare = (on) => document.body.classList.toggle('map-bare', on);
+  map.on('movestart', (e) => {
+    if (!e.originalEvent) return; // ignore moves the app makes itself
+    clearTimeout(showTimer);
+    closePopover();
+    setBare(true);
+  });
+  map.on('moveend', () => {
+    clearTimeout(showTimer);
+    if (!pinnedBare) showTimer = setTimeout(() => setBare(false), 1200);
+  });
+  map.on('click', () => {
+    if (!$('stylePop').hidden) return closePopover();
+    clearTimeout(showTimer);
+    pinnedBare = !document.body.classList.contains('map-bare');
+    setBare(pinnedBare);
+  });
+
   map.once('load', () => document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'));
   darkMQ.addEventListener('change', () => styleMode === 'auto' && applyStyle());
   document.querySelectorAll('#styleSeg button').forEach((b) => {
@@ -590,27 +612,51 @@ function loadSides() {
   });
 }
 
-const GAP = 24, SLIDE_MS = 320, EASE = 'cubic-bezier(0.22, 0.8, 0.3, 1)';
-function setTrack(x, ms = 0) {
-  const tr = $('track');
-  tr.style.transition = ms ? `transform ${ms}ms ${EASE}` : 'none';
-  tr.style.transform = x ? `translate3d(${x}px,0,0)` : '';
+const GAP = 24, EASE = 'cubic-bezier(0.22, 0.8, 0.3, 1)';
+let trackX = 0;
+function setTrack(x) {
+  trackX = x;
+  $('track').style.transform = x ? `translate3d(${x}px,0,0)` : '';
+}
+
+/* Photos-like motion: a critically damped spring (no bounce) that starts at the finger's speed,
+   so a slow drag settles gently and a flick carries on naturally. */
+const SPRING_RESPONSE = 0.5; // seconds; higher = calmer
+let springRaf = null, springDone = null;
+function springTrack(to, v0 = 0, done = null) {
+  cancelAnimationFrame(springRaf);
+  springDone = done;
+  const omega = (2 * Math.PI) / SPRING_RESPONSE, x0 = trackX - to, B = v0 + omega * x0, start = performance.now();
+  const frame = (now) => {
+    const t = (now - start) / 1000, e = Math.exp(-omega * t);
+    const x = (x0 + B * t) * e, v = (B - omega * (x0 + B * t)) * e;
+    if (Math.abs(x) < 0.5 && Math.abs(v) < 20) { setTrack(to); finishSpring(); return; }
+    setTrack(to + x);
+    springRaf = requestAnimationFrame(frame);
+  };
+  springRaf = requestAnimationFrame(frame);
+}
+function finishSpring() { // also used when a new swipe interrupts the current one
+  cancelAnimationFrame(springRaf);
+  springRaf = null;
+  const d = springDone;
+  springDone = null;
+  d?.();
 }
 let sliding = false;
-function stepViewer(d) {
-  if (sliding) return;
+function stepViewer(d, v0 = 0) {
+  finishSpring();
   const j = vIdx + d, w = $('viewerStage').clientWidth;
-  if (j < 0 || j >= vList.length) { setTrack(0, 250); return; } // nothing there: spring back
+  if (j < 0 || j >= vList.length) { springTrack(0, v0); return; } // nothing there: settle back
   sliding = true;
-  setTrack(-d * (w + GAP), SLIDE_MS);
-  setTimeout(() => {
+  springTrack(-d * (w + GAP), v0, () => {
     const side = d > 0 ? $('nextImg') : $('prevImg');
     const ready = side.dataset.id === vList[j].id && side.complete && side.naturalWidth ? side.src : null;
     vIdx = j;
     showViewer(ready);
     setTrack(0);
     sliding = false;
-  }, SLIDE_MS);
+  });
 }
 function setDismiss(dy, ms = 0) { // drag down to close: photo follows the finger, background fades
   const c = $('slideCenter'), p = Math.min(1, Math.max(0, dy) / 400);
@@ -620,6 +666,9 @@ function setDismiss(dy, ms = 0) { // drag down to close: photo follows the finge
   $('viewer').classList.toggle('dragging', !!dy);
 }
 function closeViewer() {
+  cancelAnimationFrame(springRaf);
+  springRaf = springDone = null;
+  sliding = false;
   stopVideo();
   resetZoom();
   setDismiss(0);
@@ -777,7 +826,8 @@ function toggleChrome() { $('viewer').classList.toggle('bare'); }
       const m = mid(t[0], t[1]);
       g = { type: 'pinch', d0: dist(t[0], t[1]), s0: zoom.s, m0: rel(m.x, m.y), t0: { x: zoom.tx, y: zoom.ty } };
     } else if (t.length === 1) {
-      g = { type: 'one', x0: t[0].clientX, y0: t[0].clientY, t0: { x: zoom.tx, y: zoom.ty }, time: Date.now(), moved: false };
+      finishSpring(); // grabbing during a slide finishes it at once, so quick successive swipes work
+      g = { type: 'one', x0: t[0].clientX, y0: t[0].clientY, base: trackX, t0: { x: zoom.tx, y: zoom.ty }, time: Date.now(), moved: false };
     }
   }, { passive: true });
 
@@ -799,14 +849,17 @@ function toggleChrome() { $('viewer').classList.toggle('bare'); }
         e.preventDefault();
         zoom.tx = g.t0.x + dx; zoom.ty = g.t0.y + dy;
         clampPan(); applyZoom();
-      } else if (g.moved && !sliding) {
+      } else if (g.moved) {
         e.preventDefault();
         g.axis ||= Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-        if (g.axis === 'x') { // the strip of photos follows the finger, with resistance at the ends
+        if (g.axis === 'x') { // the strip of photos follows the finger 1:1, with resistance at the ends
           const edge = (dx > 0 && vIdx === 0) || (dx < 0 && vIdx === vList.length - 1);
-          setTrack(edge ? dx * 0.3 : dx);
+          setTrack(g.base + (edge ? dx * 0.35 : dx));
         } else if (dy > 0) setDismiss(dy);
-        g.last = { x: t[0].clientX, y: t[0].clientY, time: Date.now(), vx: (t[0].clientX - (g.last?.x ?? g.x0)) / Math.max(1, Date.now() - (g.last?.time ?? g.time)) };
+        // Finger speed over the last ~100 ms, used to continue the motion after release.
+        const now = performance.now();
+        (g.samples ||= []).push({ x: t[0].clientX, y: t[0].clientY, t: now });
+        while (g.samples.length > 2 && now - g.samples[0].t > 100) g.samples.shift();
       }
     }
   }, { passive: false });
@@ -833,17 +886,19 @@ function toggleChrome() { $('viewer').classList.toggle('bare'); }
         clearTimeout(tapTimer);
         tapTimer = setTimeout(toggleChrome, 300);
       }
-    } else if (zoom.s <= 1.01 && g.axis === 'x') { // finish the slide: far enough or a quick flick
-      const w = $('viewerStage').clientWidth, vx = g.last?.vx || 0;
-      if (dx < -w * 0.22 || vx < -0.45) stepViewer(1);
-      else if (dx > w * 0.22 || vx > 0.45) stepViewer(-1);
-      else setTrack(0, 250);
+    } else if (zoom.s <= 1.01 && g.axis === 'x') { // finish the slide: far enough or a flick
+      const s = g.samples || [], a = s[0], b = s[s.length - 1];
+      const vx = a && b && b.t > a.t ? ((b.x - a.x) / (b.t - a.t)) * 1000 : 0; // px/s
+      const w = $('viewerStage').clientWidth;
+      if (dx < -w * 0.3 || vx < -350) stepViewer(1, Math.min(vx, 0));
+      else if (dx > w * 0.3 || vx > 350) stepViewer(-1, Math.max(vx, 0));
+      else springTrack(0, vx);
     } else if (zoom.s <= 1.01 && g.axis === 'y') {
       if (dy > 110) {
-        setDismiss(dy + 200, 200);
+        setDismiss(dy + 220, 260);
         $('viewer').style.setProperty('--bg-a', '0');
-        setTimeout(closeViewer, 180);
-      } else setDismiss(0, 250);
+        setTimeout(closeViewer, 240);
+      } else setDismiss(0, 380);
     }
     g = null;
   });
@@ -1218,7 +1273,6 @@ async function main() {
   $('topbar').hidden = false;
   $('controls').hidden = false;
   await initMap();
-  map.on('click', closePopover);
   if ((await db.getMeta('version')) !== DATA_VERSION) await db.reset();
   const cached = await db.all();
   const firstRun = !cached.length;
