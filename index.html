@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Lieux</title>
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Lieux">
+<meta name="robots" content="noindex">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map" aria-label="Carte de tes photos"></div>
+
+<header class="topbar glass" id="topbar" hidden>
+  <div class="titles">
+    <h1>Lieux</h1>
+    <p id="summary">—</p>
+  </div>
+  <button class="icon-btn" id="fitBtn" aria-label="Voir toutes les photos">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+</header>
+
+<nav class="years glass" id="years" hidden aria-label="Filtrer par année"></nav>
+
+<div class="status glass" id="status" hidden><span class="spinner" aria-hidden="true"></span><span id="statusText"></span></div>
+
+<section class="signin" id="signin" hidden>
+  <div class="signin-card">
+    <img src="icons/icon-192.png" alt="" width="84" height="84">
+    <h2>Lieux</h2>
+    <p>Tes photos OneDrive, sur la carte.</p>
+    <button class="primary" id="signinBtn">Se connecter avec Microsoft</button>
+    <p class="fine">Lecture seule. Tes photos ne passent par aucun serveur tiers.</p>
+  </div>
+</section>
+
+<section class="sheet glass" id="sheet" aria-hidden="true">
+  <div class="grabber" id="grabber"></div>
+  <div class="sheet-head">
+    <div>
+      <h2 id="sheetTitle">—</h2>
+      <p id="sheetSub"></p>
+    </div>
+    <button class="icon-btn close" id="sheetClose" aria-label="Fermer">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="grid" id="grid"></div>
+</section>
+
+<section class="viewer" id="viewer" aria-hidden="true">
+  <div class="viewer-top">
+    <button class="icon-btn" id="viewerClose" aria-label="Fermer">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="viewer-meta"><strong id="viewerDate"></strong><span id="viewerPlace"></span></div>
+    <a class="icon-btn" id="viewerOpen" target="_blank" rel="noopener" aria-label="Ouvrir dans OneDrive">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+  </div>
+  <div class="viewer-stage" id="viewerStage">
+    <img id="viewerImg" alt="">
+    <div class="play" id="viewerPlay" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+    </div>
+  </div>
+  <div class="viewer-count" id="viewerCount"></div>
+</section>
+
+<script src="vendor/msal-browser.min.js"></script>
+<script src="vendor/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
